@@ -1,0 +1,28 @@
+# Private runtime downloaded by install.py (includes third-party source)
+.runtime/
+
+# Local user preferences and editable personal presets
+.forge_ai_prompt_settings.json
+.forge_ai_prompt_settings.*
+user_presets/
+
+# Python, logs and editor artifacts
+__pycache__/
+*.py[cod]
+*.log
+.pytest_cache/
+.mypy_cache/
+.venv/
+venv/
+.vscode/
+.idea/
+*.tmp
+
+# Never commit model weights or generated output
+*.safetensors
+*.ckpt
+*.gguf
+*.pth
+*.pt
+*.bin
+outputs/
