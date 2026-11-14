@@ -93,6 +93,10 @@ To make GPU memory available for text generation, the extension unloads Forge's 
 | `user_presets/` | Personal presets; **not** committed to Git |
 | `.forge_ai_prompt_settings.json` | Local encoder selection; **not** committed to Git |
 
+## License
+
+Forge AI Prompt is distributed under the **GNU General Public License version 3.0 (GPL-3.0)**. See [LICENSE](LICENSE). Third-party runtime components and model weights are governed by their respective licenses.
+
 ## Third-party software and attribution
 
 - The runtime installer downloads selected components from the official [ComfyUI](https://github.com/Comfy-Org/ComfyUI) source archive, pinned to commit `dc9ffe6adde25671bf535e99556ca9f8085c7d0f`. Those components are **not included in this repository**. ComfyUI is licensed under **GPL-3.0**; its source archive contains the applicable license and notices.
