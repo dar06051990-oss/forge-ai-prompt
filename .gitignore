@@ -26,3 +26,12 @@ venv/
 *.pt
 *.bin
 outputs/
+
+# Local experimental patch backups and temporary files
+.fap_speed_v0217_backup/
+.fap_dynamic_v0218_backup/
+.fap_*.bak
+*.fap_pending
+*.fap_dynamic_pending
+*.fap_console_pending
+*.fap_quiet_startup_pending

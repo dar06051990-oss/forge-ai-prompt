@@ -20,6 +20,7 @@ STATE = EXTENSION / ".forge_ai_prompt_settings.json"
 sys.path.insert(0, str(EXTENSION / "backend"))
 import runtime_install
 import fap_preset_store as preset_store
+import fap_worker_client
 
 LOCK = threading.Lock()
 ENCODER_SUFFIXES = {".safetensors"}
@@ -126,38 +127,28 @@ def _release_forge_models_for_text():
         freed = (free_after - free_before) / (1024 ** 2) if free_before is not None else None
         amount = f' (freed approximately {freed:+.0f} MiB)' if freed is not None else ''
         print(f'[Forge AI Prompt] GPU memory available: {free_after / (1024 ** 2):,.0f} MiB{amount}', flush=True)
-    print('[Forge AI Prompt] Forge model release complete. Starting Qwen worker.', flush=True)
+    print('[Forge AI Prompt] Forge model release complete. Sending request to Qwen worker.', flush=True)
 
 
 def _run_worker_console(request, timeout):
-    """Run generation with LIVE child stdout/stderr inherited from Forge.
+    return fap_worker_client.run(WORKER, runtime_install.CORE, _worker_env(), request, timeout)
 
-    Machine-readable text is written to a temporary UTF-8 file so the worker
-    does not print the generated prompt (or a large JSON blob) to the console.
-    Probe/test callbacks continue to use the quiet _run_worker function.
-    """
-    with tempfile.TemporaryDirectory(prefix="forge_ai_prompt_result_") as temp_dir:
-        result_file = Path(temp_dir) / "result.json"
-        payload = dict(request)
-        payload["result_path"] = str(result_file)
-        completed = subprocess.run(
-            [sys.executable, "-u", str(WORKER)],
-            input=json.dumps(payload, ensure_ascii=False),
-            text=True, encoding="utf-8", errors="replace",
-            timeout=timeout, cwd=str(runtime_install.CORE),
-            shell=False, env=_worker_env(),
-            # Inherit Forge's console. Comfy's tqdm writes progress to stderr.
-            stdout=None, stderr=None,
-        )
-        if not result_file.is_file():
-            raise RuntimeError(
-                f"Text worker exited with code {completed.returncode} without a result file. "
-                "Check the Forge console traceback above."
-            )
-        obj = json.loads(result_file.read_text(encoding="utf-8"))
-        if completed.returncode and obj.get("ok"):
-            raise RuntimeError(f"Worker exited unexpectedly (code {completed.returncode}).")
-        return obj
+
+def _warmup_worker(*_args, **_kwargs):
+    # Startup is best effort: imports happen in the child, not in Forge.
+    # If the callback is unavailable, the first request starts the worker.
+    try:
+        if runtime_install.ready():
+            fap_worker_client.warmup(WORKER, runtime_install.CORE, _worker_env())
+    except Exception as exc:
+        print(f"[Forge AI Prompt] Worker warm-up skipped: {exc}", flush=True)
+
+
+try:
+    from modules import script_callbacks
+    script_callbacks.on_app_started(_warmup_worker)
+except (ImportError, AttributeError):
+    pass
 
 
 def _decode_result(proc):
@@ -315,27 +306,91 @@ def _editor_delete(selected, armed):
                 f"Cannot delete: {exc}", "")
 
 
+# FAP_PRESERVE_IMAGE_SETTINGS_V1
 def _on_mode_change(mode):
-    name = _preferred_preset(mode)
     image_mode = mode == "Describe image"
     return (
-        gr.update(value=name), _load_preset(name),
         "Describe image: the uploaded image is sent to Qwen3-VL. Optional extra text can be enabled below."
         if image_mode else "Enhance text: the reference image is ignored.",
         gr.update(visible=image_mode), gr.update(visible=image_mode),
     )
 
 
-def _on_image_change(image):
+# FAP_CLIPBOARD_V1
+_FAP_CLIPBOARD_JS = """async (_) => {
+    try {
+        if (!navigator.clipboard || typeof navigator.clipboard.read !== 'function') {
+            return ['error:Clipboard image access is unavailable. Use localhost/HTTPS or Ctrl+V.'];
+        }
+        const items = await navigator.clipboard.read();
+        let blob = null;
+        const formats = ['image/png', 'image/jpeg', 'image/webp', 'image/gif', 'image/bmp'];
+        for (const item of items) {
+            const format = formats.find(type => item.types.includes(type));
+            if (format) {
+                blob = await item.getType(format);
+                break;
+            }
+        }
+        if (!blob) return ['error:No image found in the clipboard.'];
+        if (blob.size > 24 * 1024 * 1024) return ['error:Clipboard image exceeds 24 MiB. Use the normal image upload.'];
+        const data = await new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () => resolve(reader.result);
+            reader.onerror = () => reject(new Error('Cannot read clipboard image'));
+            reader.readAsDataURL(blob);
+        });
+        return [data];
+    } catch (error) {
+        return ['error:Clipboard access failed. Allow clipboard access in the browser or use Ctrl+V.'];
+    }
+}"""
+
+
+def _fap_paste_clipboard(data):
+    import base64
+    import io
+    from PIL import Image, ImageOps
+
+    def unchanged(message):
+        if hasattr(gr, "Warning"):
+            gr.Warning(message)
+        else:
+            print("[Forge AI Prompt] " + message, flush=True)
+        return gr.update(), gr.update(), gr.update()
+
+    if not isinstance(data, str) or not data:
+        return unchanged("No image received from the clipboard.")
+    if data.startswith("error:"):
+        return unchanged(data[6:])
+    try:
+        header, sep, encoded = data.partition(",")
+        allowed = {"data:image/png;base64", "data:image/jpeg;base64", "data:image/webp;base64",
+                   "data:image/gif;base64", "data:image/bmp;base64"}
+        if not sep or header.lower() not in allowed:
+            return unchanged("Unsupported clipboard image format.")
+        if len(encoded) > 32 * 1024 * 1024:
+            return unchanged("Clipboard image exceeds 24 MiB.")
+        raw = base64.b64decode(encoded, validate=True)
+        if len(raw) > 24 * 1024 * 1024:
+            return unchanged("Clipboard image exceeds 24 MiB.")
+        with Image.open(io.BytesIO(raw)) as source:
+            if source.width * source.height > 50_000_000:
+                return unchanged("Clipboard image is too large. Resize it first.")
+            image = ImageOps.exif_transpose(source).convert("RGB")
+        # Preserve checkbox value and all other prompt/settings. Explicitly set
+        # visibility for both components even if mode.change is not dispatched.
+        return (gr.update(value=image, visible=True),
+                gr.update(value="Describe image"), gr.update(visible=True))
+    except Exception:
+        return unchanged("Could not decode clipboard image. Use normal image upload or Ctrl+V.")
+
+
+def _on_image_change(image, mode):
     if image is None:
-        return (gr.update(), gr.update(), gr.update(), gr.update(),
-                "Image removed. Choose Enhance text for text-only generation.")
-    name = _preferred_preset("Describe image")
-    return (gr.update(value="Describe image"),
-            gr.update(value=name),
-            _load_preset(name), gr.update(value=""),
-            f"Image uploaded ({image.width}x{image.height}). Switched to Describe image; "
-            "cleared the previous text prompt to avoid influencing the description.")
+        return (gr.update(), "Image removed. Choose Enhance text for text-only generation.")
+    return (gr.update() if mode == "Describe image" else gr.update(value="Describe image"),
+            f"Image uploaded ({image.width}x{image.height}). Current prompt and settings preserved.")
 
 
 def _generate(encoder_root, encoder, clip_type, prompt, system_prompt,
@@ -629,6 +684,11 @@ class Script(scripts.Script):
                         label="Reference image (Qwen3-VL)", type="pil", height=170,
                         visible=False, elem_id=f"fap_image_{suffix}",
                     )
+                    paste_clipboard = gr.Button(
+                        "Paste from Clipboard", variant="secondary",
+                        elem_id=f"fap_paste_clipboard_{suffix}",
+                    )
+                    clipboard_data = gr.Textbox(value="", visible=False)
                     include_text = gr.Checkbox(
                         label="Include text instructions with image", value=False,
                         visible=False,
@@ -694,13 +754,18 @@ class Script(scripts.Script):
                                outputs=[editor_box], queue=False)
             mode.change(
                 _on_mode_change, inputs=[mode],
-                outputs=[preset, system_prompt, mode_info, ref_image, include_text],
+                outputs=[mode_info, ref_image, include_text],
                 queue=False,
             )
             ref_image.change(
-                _on_image_change, inputs=[ref_image],
-                outputs=[mode, preset, system_prompt, prompt, mode_info],
+                _on_image_change, inputs=[ref_image, mode],
+                outputs=[mode, mode_info],
                 queue=False,
+            )
+            paste_clipboard.click(
+                _fap_paste_clipboard, inputs=[clipboard_data],
+                outputs=[ref_image, mode, include_text],
+                _js=_FAP_CLIPBOARD_JS, queue=False,
             )
             run.click(
                 _generate,
@@ -738,6 +803,13 @@ class Script(scripts.Script):
                         target.dispatchEvent(new Event('input', {{ bubbles: true }}));
                     }}
                     target.dispatchEvent(new Event('change', {{ bubbles: true }}));
+                    // FAP_PROMPT_SCROLL_V1
+                    try {{ target.focus({{ preventScroll: true }}); }} catch (e) {{ target.focus(); }}
+                    requestAnimationFrame(() => {{
+                        if (target.isConnected) {{
+                            target.scrollIntoView({{ behavior: 'smooth', block: 'center', inline: 'nearest' }});
+                        }}
+                    }});
                     console.info('[Forge AI Prompt] Inserted into {"img2img" if is_img2img else "txt2img"} prompt.');
                     return [];
                 }}""",

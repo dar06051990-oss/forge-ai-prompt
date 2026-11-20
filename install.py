@@ -18,6 +18,9 @@ def main() -> int:
     try:
         import runtime_install
         message = runtime_install.startup_install()
+        # FAP_QUIET_STARTUP_V2: suppress only the routine no-op result.
+        if message == "Runtime and Python dependencies already present; skipping installation.":
+            return 0
         for line in message.splitlines():
             print("[Forge AI Prompt: installer] " + line, flush=True)
         return 1 if message.startswith("ERROR:") else 0

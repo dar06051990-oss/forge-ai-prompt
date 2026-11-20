@@ -1,23 +1,21 @@
-# Forge AI Prompt v0.2.16
+# Forge AI Prompt v0.2.19
 
-First public release of **Forge AI Prompt**, a local AI prompt generation extension for **Forge Neo**.
+Performance and usability update for the local AI prompt generation extension for Forge Neo.
 
 ### Highlights
-- **Text → prompt:** Enhance short image-generation instructions.
-- **Image → prompt:** Describe a reference image using a compatible Qwen3-VL text encoder.
-- **Russian and English:** Fixed Windows UTF-8 input handling for Cyrillic prompts.
-- **Native Forge UI:** Available in both txt2img and img2img, with copy/insert actions.
-- **Preset manager:** Built-in and editable custom system prompts.
-- **Live console progress:** Model loading, generation progress, elapsed time and tokens/s.
-- **VRAM handoff:** Unloads Forge image-generation model weights before text generation when necessary.
-- **Automatic setup:** `install.py` verifies and restores the local backend and missing dependencies on normal Forge startup.
 
-### Requirements
-Forge Neo on Windows with a working Python environment; a compatible generation-capable `.safetensors` Qwen3-VL encoder. Model weights are **not included**.
+- Persistent private worker, model/tokenizer caching and one-time startup initialization.
+- ComfyUI Dynamic VRAM (AIMDO) with legacy fallback and safe GPU memory handoff.
+- Faster request preparation and detailed generation timing.
+- Cleaner startup console without hiding warnings or errors.
+- Automatic focus and scrolling after inserting text into the main Forge prompt.
+- Reference images and text instructions can be combined without resetting the prompt or preset.
+- New **Paste from Clipboard** button (browser permission and localhost/HTTPS required).
 
-### Notes
-The extension uses a private snapshot of ComfyUI components downloaded during installation; it does **not** install or run a separate ComfyUI server. The installer avoids replacing PyTorch and GPU accelerator packages. Only Windows/Forge Neo has been tested.
+This version incorporates the tested v0.2.17 and v0.2.18 development patches and subsequent UI fixes. The pinned ComfyUI source and Python/GPU dependencies are unchanged. Model weights and local user data are not included.
 
-**License:** GNU GPL v3.0. See [LICENSE](LICENSE).
+### Updating
 
-See [README.md](README.md) for full requirements, configuration, usage and troubleshooting.
+Close Forge first. If you installed development patches manually, back up the current extension before updating; local modifications may prevent a normal Git pull. Keep `.runtime/`, `user_presets/`, and `.forge_ai_prompt_settings.json`. Do not reapply the old patches after installing v0.2.19.
+
+See [README.md](README.md) for requirements and usage. Licensed under [GNU GPL v3.0](LICENSE).
