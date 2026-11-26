@@ -115,6 +115,21 @@ def _release_forge_models_for_text():
     # the underlying model patchers. Native txt2img/img2img will therefore
     # reload the selected checkpoint on the next image generation.
     sd_models.unload_model_weights()
+    # COMFY_NEO_AI_PROMPT_VRAM_HANDOFF_V1
+    # The private Comfy worker has a separate CUDA context. Reuse its existing
+    # synchronous, owned-worker release API before loading the text encoder.
+    import sys
+    comfy_backend = sys.modules.get('forge_h3.comfy_full_backend')
+    if comfy_backend is not None:
+        release = getattr(comfy_backend, 'release_for_native_forge', None)
+        if not callable(release):
+            raise RuntimeError('Comfy Neo VRAM release API is unavailable.')
+        with comfy_backend._lock:
+            if comfy_backend._active_prompt_id is not None:
+                raise RuntimeError('Comfy Neo is generating. Stop it before starting AI Prompt.')
+            print('[Forge AI Prompt] Releasing private Comfy Neo worker...', flush=True)
+            if not release(destination='AI Prompt'):
+                raise RuntimeError('Comfy Neo worker release did not complete.')
 
     free_after = None
     try:
